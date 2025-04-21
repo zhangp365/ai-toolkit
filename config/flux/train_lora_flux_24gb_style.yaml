@@ -2,11 +2,11 @@
 job: extension
 config:
   # this name will be the folder and filename name
-  name: "flux_dev_lora_crafted_doll_v1"
+  name: "flux_dev_lora_crayon_shin_chan_v1"
   process:
     - type: 'sd_trainer'
       # root folder to save training sessions/samples/weights
-      training_folder: "/content/drive/MyDrive/lora/crafted_doll"
+      training_folder: "/content/drive/MyDrive/lora/crayon_shin_chan"
       # uncomment to see performance stats in the terminal every N steps
 #      performance_log_every: 1000
       device: cuda:0
@@ -31,7 +31,7 @@ config:
         # images will automatically be resized and bucketed into the resolution specified
         # on windows, escape back slashes with another backslash so
         # "C:\\path\\to\\images\\folder"
-        - folder_path: "/content/drive/MyDrive/lora_data/crafted_doll"
+        - folder_path: "/content/drive/MyDrive/lora_data/crayon_shin_chan"
           caption_ext: "txt"
           caption_dropout_rate: 0.05  # will drop out the caption 5% of time
           shuffle_tokens: false  # shuffle caption order, split by commas
@@ -43,7 +43,7 @@ config:
         gradient_accumulation_steps: 1
         train_unet: true
         content_or_style: "style"
-        trigger_word: "crafted doll"
+        trigger_word: "crayon shin-chan​​"
         train_text_encoder: false  # probably won't work with flux
         gradient_checkpointing: true  # need the on unless you have a ton of vram
         noise_scheduler: "flowmatch" # for training only
