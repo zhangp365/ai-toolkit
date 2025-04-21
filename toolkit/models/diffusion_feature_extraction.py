@@ -154,13 +154,15 @@ class DiffusionFeatureExtractor(nn.Module):
 
 
 class DiffusionFeatureExtractor3(nn.Module):
-    def __init__(self, device=torch.device("cuda"), dtype=torch.bfloat16):
+    def __init__(self, device=torch.device("cuda"), dtype=torch.bfloat16, vae=None):
         super().__init__()
         self.version = 3
-        vae = AutoencoderTiny.from_pretrained(
-            "madebyollin/taef1", torch_dtype=torch.bfloat16)
+        if vae is None:
+            vae = AutoencoderTiny.from_pretrained(
+                "madebyollin/taef1", torch_dtype=torch.bfloat16)
         self.vae = vae
-        image_encoder_path = "google/siglip-so400m-patch14-384"
+        # image_encoder_path = "google/siglip-so400m-patch14-384"
+        image_encoder_path = "google/siglip2-so400m-patch16-512"
         try:
             self.image_processor = SiglipImageProcessor.from_pretrained(
                 image_encoder_path)
@@ -181,7 +183,11 @@ class DiffusionFeatureExtractor3(nn.Module):
         dtype = torch.bfloat16
         device = self.vae.device
         # resize to 384x384
-        images = F.interpolate(tensors_0_1, size=(384, 384),
+        if 'height' in self.image_processor.size:
+            size = self.image_processor.size['height']
+        else:
+            size = self.image_processor.crop_size['height']
+        images = F.interpolate(tensors_0_1, size=(size, size),
                                mode='bicubic', align_corners=False)
 
         mean = torch.tensor(self.image_processor.image_mean).to(
@@ -342,9 +348,9 @@ class DiffusionFeatureExtractor3(nn.Module):
         return total_loss
 
 
-def load_dfe(model_path) -> DiffusionFeatureExtractor:
+def load_dfe(model_path, vae=None) -> DiffusionFeatureExtractor:
     if model_path == "v3":
-        dfe = DiffusionFeatureExtractor3()
+        dfe = DiffusionFeatureExtractor3(vae=vae)
         dfe.eval()
         return dfe
     if not os.path.exists(model_path):

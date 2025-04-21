@@ -7,6 +7,7 @@ import shutil
 from collections import OrderedDict
 import os
 import re
+import traceback
 from typing import Union, List, Optional
 
 import numpy as np
@@ -59,7 +60,7 @@ from tqdm import tqdm
 from toolkit.config_modules import SaveConfig, LoggingConfig, SampleConfig, NetworkConfig, TrainConfig, ModelConfig, \
     GenerateImageConfig, EmbeddingConfig, DatasetConfig, preprocess_dataset_raw_config, AdapterConfig, GuidanceConfig, validate_configs, \
     DecoratorConfig
-from toolkit.logging import create_logger
+from toolkit.logging_aitk import create_logger
 from diffusers import FluxTransformer2DModel
 from toolkit.accelerator import get_accelerator
 from toolkit.print import print_acc
@@ -320,8 +321,16 @@ class BaseSDTrainProcess(BaseTrainProcess):
         if self.ema is not None:
             self.ema.eval()
 
+        # let adapter know we are sampling
+        if self.adapter is not None and isinstance(self.adapter, CustomAdapter):
+            self.adapter.is_sampling = True
+        
         # send to be generated
         self.sd.generate_images(gen_img_config_list, sampler=sample_config.sampler)
+
+        
+        if self.adapter is not None and isinstance(self.adapter, CustomAdapter):
+            self.adapter.is_sampling = False
 
         if self.ema is not None:
             self.ema.train()
@@ -330,18 +339,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
         o_dict = OrderedDict({
             "training_info": self.get_training_info()
         })
-        if self.model_config.is_v2:
-            o_dict['ss_v2'] = True
-            o_dict['ss_base_model_version'] = 'sd_2.1'
-
-        elif self.model_config.is_xl:
-            o_dict['ss_base_model_version'] = 'sdxl_1.0'
-        elif self.model_config.is_flux:
-            o_dict['ss_base_model_version'] = 'flux.1'
-        elif self.model_config.is_lumina2:
-            o_dict['ss_base_model_version'] = 'lumina2'
-        else:
-            o_dict['ss_base_model_version'] = 'sd_1.5'
+        o_dict['ss_base_model_version'] = self.sd.get_base_model_version()
 
         o_dict = add_base_model_info_to_meta(
             o_dict,
@@ -578,7 +576,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         direct_save = True
                     if self.adapter_config.type == 'redux':
                         direct_save = True
-                    if self.adapter_config.type == 'control_lora':
+                    if self.adapter_config.type in ['control_lora', 'subpixel', 'i2v']:
                         direct_save = True
                     save_ip_adapter_from_diffusers(
                         state_dict,
@@ -622,6 +620,8 @@ class BaseSDTrainProcess(BaseTrainProcess):
             path_to_save = file_path = os.path.join(self.save_root, 'learnable_snr.json')
             with open(path_to_save, 'w') as f:
                 json.dump(json_data, f, indent=4)
+        
+        print_acc(f"Saved checkpoint to {file_path}")
 
         # save optimizer
         if self.optimizer is not None:
@@ -630,11 +630,11 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 file_path = os.path.join(self.save_root, filename)
                 state_dict = self.optimizer.state_dict()
                 torch.save(state_dict, file_path)
+                print_acc(f"Saved optimizer to {file_path}")
             except Exception as e:
                 print_acc(e)
                 print_acc("Could not save optimizer")
 
-        print_acc(f"Saved to {file_path}")
         self.clean_up_saves()
         self.post_save_hook(file_path)
 
@@ -918,6 +918,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 noise = self.sd.get_latent_noise(
                     height=latents.shape[2],
                     width=latents.shape[3],
+                    num_channels=latents.shape[1],
                     batch_size=batch_size,
                     noise_offset=self.train_config.noise_offset,
                 ).to(self.device_torch, dtype=dtype)
@@ -1311,6 +1312,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
         if self.network_config is not None:
             adapter_name = f"{adapter_name}_{suffix}"
         latest_save_path = self.get_latest_save_path(adapter_name)
+        
+        if latest_save_path is not None and not self.adapter_config.train:
+            # the save path is for something else since we are not training
+            latest_save_path = self.adapter_config.name_or_path
 
         dtype = get_torch_dtype(self.train_config.dtype)
         if is_t2i:
@@ -2007,7 +2012,17 @@ class BaseSDTrainProcess(BaseTrainProcess):
             # flush()
             ### HOOK ###
             with self.accelerator.accumulate(self.modules_being_trained):
-                loss_dict = self.hook_train_loop(batch_list)
+                try:
+                    loss_dict = self.hook_train_loop(batch_list)
+                except Exception as e:
+                    traceback.print_exc()
+                    #print batch info
+                    print("Batch Items:")
+                    for batch in batch_list:
+                        for item in batch.file_items:
+                            print(f" - {item.path}")
+                    raise e
+                    
             self.timer.stop('train_loop')
             if not did_first_flush:
                 flush()
@@ -2071,7 +2086,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         # print above the progress bar
                         if self.progress_bar is not None:
                             self.progress_bar.pause()
-                        print_acc(f"Saving at step {self.step_num}")
+                        print_acc(f"\nSaving at step {self.step_num}")
                         self.save(self.step_num)
                         self.ensure_params_requires_grad()
                         if self.progress_bar is not None:

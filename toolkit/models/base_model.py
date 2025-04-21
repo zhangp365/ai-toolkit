@@ -1,10 +1,11 @@
 import copy
 import gc
+import inspect
 import json
 import random
 import shutil
 import typing
-from typing import Union, List, Literal
+from typing import Optional, Union, List, Literal
 import os
 from collections import OrderedDict
 import copy
@@ -229,6 +230,20 @@ class BaseModel:
     @property
     def is_lumina2(self):
         return self.arch == 'lumina2'
+
+    def get_bucket_divisibility(self):
+        if self.vae is None:
+            return 8
+        try:
+            divisibility = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+        except:
+            # if we have a custom vae, it might not have this
+            divisibility = 8
+        
+        # flux packs this again,
+        if self.is_flux:
+            divisibility = divisibility * 2
+        return divisibility
 
     # these must be implemented in child classes
     def load_model(self):
@@ -688,6 +703,7 @@ class BaseModel:
             return_conditional_pred=False,
             guidance_embedding_scale=1.0,
             bypass_guidance_embedding=False,
+            batch: Union[None, 'DataLoaderBatchDTO'] = None,
             **kwargs,
     ):
         conditional_pred = None
@@ -709,9 +725,13 @@ class BaseModel:
         do_classifier_free_guidance = True
 
         # check if batch size of embeddings matches batch size of latents
-        if latents.shape[0] == text_embeddings.text_embeds.shape[0]:
+        if isinstance(text_embeddings.text_embeds, list):
+            te_batch_size = text_embeddings.text_embeds[0].shape[0]
+        else:
+            te_batch_size = text_embeddings.text_embeds.shape[0]
+        if latents.shape[0] == te_batch_size:
             do_classifier_free_guidance = False
-        elif latents.shape[0] * 2 != text_embeddings.text_embeds.shape[0]:
+        elif latents.shape[0] * 2 != te_batch_size:
             raise ValueError(
                 "Batch size of latents must be the same or half the batch size of text embeddings")
         latents = latents.to(self.device_torch)
@@ -797,13 +817,22 @@ class BaseModel:
             self.unet.to(self.device_torch)
         if self.unet.dtype != self.torch_dtype:
             self.unet = self.unet.to(dtype=self.torch_dtype)
+            
+        # check if get_noise prediction has guidance_embedding_scale
+        # if it does not, we dont pass it
+        signatures =  inspect.signature(self.get_noise_prediction).parameters
+        
+        if 'guidance_embedding_scale' in signatures:
+            kwargs['guidance_embedding_scale'] = guidance_embedding_scale
+        if 'bypass_guidance_embedding' in signatures:
+            kwargs['bypass_guidance_embedding'] = bypass_guidance_embedding
+        if 'batch' in signatures:
+            kwargs['batch'] = batch
 
         noise_pred = self.get_noise_prediction(
             latent_model_input=latent_model_input,
             timestep=timestep,
             text_embeddings=text_embeddings,
-            guidance_embedding_scale=guidance_embedding_scale,
-            bypass_guidance_embedding=bypass_guidance_embedding,
             **kwargs
         )
 
@@ -1453,3 +1482,11 @@ class BaseModel:
     def condition_noisy_latents(self, latents: torch.Tensor, batch:'DataLoaderBatchDTO'):
         # can be overridden in child classes to condition latents before noise prediction
         return latents
+    
+    def get_transformer_block_names(self) -> Optional[List[str]]:
+        # override in child classes to get transformer block names for lora targeting
+        return None
+    
+    def get_base_model_version(self) -> str:
+        # override in child classes to get the base model version
+        return "unknown"

@@ -4,7 +4,7 @@ import json
 import random
 import shutil
 import typing
-from typing import Union, List, Literal, Iterator
+from typing import Optional, Union, List, Literal, Iterator
 import sys
 import os
 from collections import OrderedDict
@@ -26,13 +26,12 @@ from toolkit.clip_vision_adapter import ClipVisionAdapter
 from toolkit.custom_adapter import CustomAdapter
 from toolkit.dequantize import patch_dequantization_on_save
 from toolkit.ip_adapter import IPAdapter
-from library.model_util import convert_unet_state_dict_to_sd, convert_text_encoder_state_dict_to_sd_v2, \
-    convert_vae_state_dict, load_vae
+from toolkit.util.vae import load_vae
 from toolkit import train_tools
 from toolkit.config_modules import ModelConfig, GenerateImageConfig, ModelArch
 from toolkit.metadata import get_meta_for_safetensors
 from toolkit.models.decorator import Decorator
-from toolkit.paths import REPOS_ROOT, KEYMAPS_ROOT
+from toolkit.paths import KEYMAPS_ROOT
 from toolkit.prompt_utils import inject_trigger_into_prompt, PromptEmbeds, concat_prompt_embeds
 from toolkit.reference_adapter import ReferenceAdapter
 from toolkit.sampler import get_sampler
@@ -249,6 +248,17 @@ class StableDiffusion:
     @property
     def unet_unwrapped(self):
         return unwrap_model(self.unet)
+    
+    def get_bucket_divisibility(self):
+        if self.vae is None:
+            return 8
+        divisibility = 2 ** (len(self.vae.config['block_out_channels']) - 1)
+        
+        # flux packs this again,
+        if self.is_flux or self.is_v3:
+            divisibility = divisibility * 2
+        return divisibility
+        
 
     def load_model(self):
         if self.is_loaded:
@@ -1721,6 +1731,7 @@ class StableDiffusion:
             pixel_width=None,
             batch_size=1,
             noise_offset=0.0,
+            num_channels=None,
     ):
         VAE_SCALE_FACTOR = 2 ** (len(self.vae.config['block_out_channels']) - 1)
         if height is None and pixel_height is None:
@@ -1732,10 +1743,11 @@ class StableDiffusion:
         if width is None:
             width = pixel_width // VAE_SCALE_FACTOR
 
-        num_channels = self.unet_unwrapped.config['in_channels']
-        if self.is_flux:
-            # has 64 channels in for some reason
-            num_channels = 16
+        if num_channels is None:
+            num_channels = self.unet_unwrapped.config['in_channels']
+            if self.is_flux:
+                # it gets packed, unpack it
+                num_channels = num_channels // 4
         noise = torch.randn(
             (
                 batch_size,
@@ -1818,6 +1830,7 @@ class StableDiffusion:
             return_conditional_pred=False,
             guidance_embedding_scale=1.0,
             bypass_guidance_embedding=False,
+            batch: Union[None, 'DataLoaderBatchDTO'] = None,
             **kwargs,
     ):
         conditional_pred = None
@@ -2995,6 +3008,8 @@ class StableDiffusion:
             active_modules = ['vae']
         if device_state_preset in ['cache_clip']:
             active_modules = ['clip']
+        if device_state_preset in ['unload']:
+            active_modules = []
         if device_state_preset in ['generate']:
             active_modules = ['vae', 'unet', 'text_encoder', 'adapter', 'refiner_unet']
 
@@ -3063,3 +3078,28 @@ class StableDiffusion:
     def condition_noisy_latents(self, latents: torch.Tensor, batch:'DataLoaderBatchDTO'):
         # can be overridden in child classes to condition latents before noise prediction
         return latents
+    
+    def get_transformer_block_names(self) -> Optional[List[str]]:
+        # override in child classes to get transformer block names for lora targeting
+        return None
+    
+    def get_base_model_version(self) -> str:
+        if self.is_pixart:
+            return 'pixart'
+        if self.is_v3:
+            return 'sd_3'
+        if self.is_auraflow:
+            return 'auraflow'
+        if self.is_flux:
+            return 'flux.1'
+        if self.is_lumina2:
+            return 'lumina2'
+        if self.is_ssd:
+            return 'ssd'
+        if self.is_vega:
+            return 'vega'
+        if self.is_xl:
+            return 'sdxl_1.0'
+        if self.is_v2:
+            return 'sd_2.1'
+        return 'sd_1.5'

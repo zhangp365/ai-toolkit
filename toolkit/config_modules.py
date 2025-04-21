@@ -13,7 +13,7 @@ SaveFormat = Literal['safetensors', 'diffusers']
 
 if TYPE_CHECKING:
     from toolkit.guidance import GuidanceType
-    from toolkit.logging import EmptyLogger
+    from toolkit.logging_aitk import EmptyLogger
 else:
     EmptyLogger = None
 
@@ -151,14 +151,14 @@ class NetworkConfig:
         self.lokr_factor = kwargs.get('lokr_factor', -1)
 
 
-AdapterTypes = Literal['t2i', 'ip', 'ip+', 'clip', 'ilora', 'photo_maker', 'control_net', 'control_lora']
+AdapterTypes = Literal['t2i', 'ip', 'ip+', 'clip', 'ilora', 'photo_maker', 'control_net', 'control_lora', 'i2v']
 
 CLIPLayer = Literal['penultimate_hidden_states', 'image_embeds', 'last_hidden_state']
 
 
 class AdapterConfig:
     def __init__(self, **kwargs):
-        self.type: AdapterTypes = kwargs.get('type', 't2i')  # t2i, ip, clip, control_net
+        self.type: AdapterTypes = kwargs.get('type', 't2i')  # t2i, ip, clip, control_net, i2v
         self.in_channels: int = kwargs.get('in_channels', 3)
         self.channels: List[int] = kwargs.get('channels', [320, 640, 1280, 1280])
         self.num_res_blocks: int = kwargs.get('num_res_blocks', 2)
@@ -252,6 +252,13 @@ class AdapterConfig:
         self.control_image_dropout: float = kwargs.get('control_image_dropout', 0.0)
         self.has_inpainting_input: bool = kwargs.get('has_inpainting_input', False)
         self.invert_inpaint_mask_chance: float = kwargs.get('invert_inpaint_mask_chance', 0.0)
+        
+        # for subpixel adapter
+        self.subpixel_downscale_factor: int = kwargs.get('subpixel_downscale_factor', 8)
+        
+        # for i2v adapter
+        # append the masked start frame. During pretraining we will only do the vision encoder
+        self.i2v_do_start_frame: bool = kwargs.get('i2v_do_start_frame', False)
 
 
 class EmbeddingConfig:
@@ -537,6 +544,11 @@ class ModelConfig:
         
         self.arch: ModelArch = kwargs.get("arch", None)
         
+        # can be used to load the extras like text encoder or vae from here
+        # only setup for some models but will prevent having to download the te for
+        # 20 different model variants
+        self.extras_name_or_path = kwargs.get("extras_name_or_path", self.name_or_path)
+        
         # kwargs to pass to the model
         self.model_kwargs = kwargs.get("model_kwargs", {})
         
@@ -675,6 +687,7 @@ class SliderConfig:
                 self.targets.append(target)
         print(f"Built {len(self.targets)} slider targets (with permutations)")
 
+ControlTypes = Literal['depth', 'line', 'pose', 'inpaint', 'mask']
 
 class DatasetConfig:
     """
@@ -701,7 +714,10 @@ class DatasetConfig:
                 random_triggers = [line for line in random_triggers if line.strip() != '']
         self.random_triggers: List[str] = random_triggers
         self.random_triggers_max: int = kwargs.get('random_triggers_max', 1)
-        self.caption_ext: str = kwargs.get('caption_ext', None)
+        self.caption_ext: str = kwargs.get('caption_ext', '.txt')
+        # if caption_ext doesnt start with a dot, add it
+        if self.caption_ext and not self.caption_ext.startswith('.'):
+            self.caption_ext = '.' + self.caption_ext
         self.random_scale: bool = kwargs.get('random_scale', False)
         self.random_crop: bool = kwargs.get('random_crop', False)
         self.resolution: int = kwargs.get('resolution', 512)
@@ -732,6 +748,7 @@ class DatasetConfig:
         self.mask_min_value: float = kwargs.get('mask_min_value', 0.0)  # min value for . 0 - 1
         self.poi: Union[str, None] = kwargs.get('poi',
                                                 None)  # if one is set and in json data, will be used as auto crop scale point of interes
+        self.use_short_captions: bool = kwargs.get('use_short_captions', False)  # if true, will use 'caption_short' from json
         self.num_repeats: int = kwargs.get('num_repeats', 1)  # number of times to repeat dataset
         # cache latents will store them in memory
         self.cache_latents: bool = kwargs.get('cache_latents', False)
@@ -791,6 +808,13 @@ class DatasetConfig:
         
         # debug the frame count and frame selection. You dont need this. It is for debugging.
         self.debug: bool = kwargs.get('debug', False)
+        
+        # automatic controls
+        self.controls: List[ControlTypes] = kwargs.get('controls', [])
+        if isinstance(self.controls, str):
+            self.controls = [self.controls]
+        # remove empty strings
+        self.controls = [control for control in self.controls if control.strip() != '']
 
 
 def preprocess_dataset_raw_config(raw_config: List[dict]) -> List[dict]:
@@ -947,6 +971,8 @@ class GenerateImageConfig:
             # video
             if self.num_frames == 1:
                 raise ValueError(f"Expected 1 img but got a list {len(image)}")
+            if self.num_frames > 1 and self.output_ext not in ['webp']:
+                self.output_ext = 'webp'
             if self.output_ext == 'webp':
                 # save as animated webp
                 duration = 1000 // self.fps  # Convert fps to milliseconds per frame
@@ -1066,6 +1092,8 @@ class GenerateImageConfig:
                         # split by comma
                         self.extra_values = [float(val) for val in content.split(',')]
                     elif flag == 'frames':
+                        self.num_frames = int(content)
+                    elif flag == 'num_frames':
                         self.num_frames = int(content)
                     elif flag == 'fps':
                         self.fps = int(content)
