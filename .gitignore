@@ -167,8 +167,7 @@ cython_debug/
 /.tmp
 /venv.bkp
 /venv.*
-/config/*
-!/config/examples
+/config/zhang
 !/config/_PUT_YOUR_CONFIGS_HERE).txt
 /output/*
 !/output/.gitkeep
@@ -180,3 +179,5 @@ cython_debug/
 .DS_Store
 ._.DS_Store
 aitk_db.db
+repositories/
+train/
