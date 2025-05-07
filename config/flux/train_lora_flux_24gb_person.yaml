@@ -90,6 +90,8 @@ config:
         walk_seed: true
         guidance_scale: 4
         sample_steps: 20
+      logging:
+        use_wandb: true
 # you can add any additional meta info here. [name] is replaced with config name at top
 meta:
   name: "[name]"

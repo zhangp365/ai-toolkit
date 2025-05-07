@@ -2,11 +2,11 @@
 job: extension
 config:
   # this name will be the folder and filename name
-  name: "flux_dev_lora_crayon_shin_chan_v1"
+  name: "flux_dev_lora_my_world_v2"
   process:
     - type: 'sd_trainer'
       # root folder to save training sessions/samples/weights
-      training_folder: "/content/drive/MyDrive/lora/crayon_shin_chan"
+      training_folder: "/home/data/lora_training/my_world2"
       # uncomment to see performance stats in the terminal every N steps
 #      performance_log_every: 1000
       device: cuda:0
@@ -31,7 +31,7 @@ config:
         # images will automatically be resized and bucketed into the resolution specified
         # on windows, escape back slashes with another backslash so
         # "C:\\path\\to\\images\\folder"
-        - folder_path: "/content/drive/MyDrive/lora_data/crayon_shin_chan"
+        - folder_path: "/home/data/lora_training/my_world2"
           caption_ext: "txt"
           caption_dropout_rate: 0.05  # will drop out the caption 5% of time
           shuffle_tokens: false  # shuffle caption order, split by commas
@@ -39,11 +39,11 @@ config:
           resolution: [ 512, 768, 1024 ]  # flux enjoys multiple resolutions
       train:
         batch_size: 1
-        steps: 3000  # total number of steps to train 500 - 4000 is a good range
+        steps: 6000  # total number of steps to train 500 - 4000 is a good range
         gradient_accumulation_steps: 1
         train_unet: true
         content_or_style: "style"
-        trigger_word: "crayon shin-chan​​"
+        trigger_word: "a voxel art style, reminiscent of Minecraft, blocky and smiling robots. The robot is constructed from cubes.​"
         train_text_encoder: false  # probably won't work with flux
         gradient_checkpointing: true  # need the on unless you have a ton of vram
         noise_scheduler: "flowmatch" # for training only
@@ -92,6 +92,8 @@ config:
         walk_seed: true
         guidance_scale: 4
         sample_steps: 20
+      logging:
+        use_wandb: true
 # you can add any additional meta info here. [name] is replaced with config name at top
 meta:
   name: "[name]"
